@@ -7,7 +7,7 @@
 答：Makefile中生成ucore.img的代码段如下
 
 ```makefile
-# create ucore.img
+# create ucore.img 
 UCOREIMG    := $(call totarget,ucore.img)
 
 $(UCOREIMG): $(kernel) $(bootblock)
@@ -177,3 +177,44 @@ dd if=bin/kernel of=bin/ucore.img seek=1 conv=notrunc
 ## 练习2
 
 - [练习2.1] 从 CPU 加电后执行的第一条指令开始,单步跟踪 BIOS 的执行。
+
+首先修改Makefile文件,添加一个新的target`debug-init`
+
+```makefile
+debug-init: $(UCOREIMG)
+	$(V)$(TERMINAL) -e "$(QEMU) -S -s -d in_asm -D $(BINDIR)/q.log -monitor stdio -hda $< -serial null"
+	$(V)sleep 2
+	$(V)$(TERMINAL) -e "gdb -q -x tools/gdbinit"
+```
+
+其中第一条指令含义为，新启动一个gnome终端并运行debug状态的qemu，并将打印的汇编代码输出到`q.log`文件中。
+同时将文件`tools/gdbinit`的内容修改为：
+
+```
+file bin/kernel
+target remote :1234
+set architecture i8086
+break kern_init
+```
+
+该文件是gdb在初始化时执行的命令，首先加载`bin/kernel`的符号，再对qemu的1234端口进行连接，并设置模拟的CPU架构为`i8086`，便于进一步调试。
+
+经过实验，gdb终端在访问`$pc`寄存器/变量时，并没有考虑段机制中`CS`寄存器的偏移，而qemu提供的终端考虑到了这一点，可以很方便地查看当前的运行状态。CPU初始时处于32位实模式，第一条运行的指令为：
+
+    (qemu) x $pc
+    0xfffffff0:  ljmp   $0xf000,$0xe05b
+
+经过长跳转之后，CPU进入16位实模式，BIOS指令大致为：
+
+```
+(qemu) x /50i $pc
+0x000fe05b:  cmpl   $0x0,%cs:0x6c48
+0x000fe062:  jne    0xfd2e1
+0x000fe066:  xor    %dx,%dx
+0x000fe068:  mov    %dx,%ss
+0x000fe06a:  mov    $0x7000,%esp
+0x000fe070:  mov    $0xf3691,%edx
+0x000fe076:  jmp    0xfd165
+0x000fe079:  push   %ebp
+...
+```
